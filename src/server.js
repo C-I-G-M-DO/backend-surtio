@@ -1,16 +1,21 @@
-require('dotenv').config();
+import 'dotenv/config';
 
-const express = require('express');
-const cors = require('cors');
+import express from 'express';
+import cors from 'cors';
 
-const connectDB = require('./config/db');
-const authRoutes = require('./routes/auth.routes');
+import imageRoutes from './routes/image.routes.js';
+import saleRoutes from './routes/saleRoutes.js';
+import productRoutes from './routes/product.routes.js';
+import authRoutes from './routes/auth.routes.js';
+
+import connectDB from './config/db.js';
 
 const app = express();
 
 connectDB();
 
 app.use(cors());
+
 app.use(express.json());
 
 app.get('/', (req, res) => {
@@ -21,8 +26,17 @@ app.get('/', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 
+app.use('/api/products', productRoutes);
+
+// Obtener imágenes
+app.use('/api', imageRoutes);
+
+// Ventas
+app.use('/api/sales', saleRoutes);
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor ejecutándose en http://localhost:${PORT}`);
 });
+

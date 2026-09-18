@@ -1,8 +1,9 @@
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 
-async function login(req, res) {
+import User from '../models/User.js';
+
+export async function login(req, res) {
   try {
     const { phone, password } = req.body;
 
@@ -61,6 +62,3 @@ async function login(req, res) {
   }
 }
 
-module.exports = {
-  login,
-};

@@ -1,5 +1,5 @@
-const dns = require('dns');
-const mongoose = require('mongoose');
+import dns from 'dns';
+import mongoose from 'mongoose';
 
 // Usar DNS públicos para resolver MongoDB Atlas
 dns.setServers(['1.1.1.1', '8.8.8.8']);
@@ -15,4 +15,5 @@ async function connectDB() {
   }
 }
 
-module.exports = connectDB;
+export default connectDB;
+

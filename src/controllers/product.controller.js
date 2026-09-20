@@ -25,6 +25,82 @@ export const crearProducto = async (req, res) => {
   }
 };
 
+// ACTUALIZAR PRECIOS DEL PRODUCTO
+export const actualizarPrecios = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { precios } = req.body;
+
+    // Validar que precios sea un arreglo
+    if (!Array.isArray(precios)) {
+      return res.status(400).json({
+        message: "Los precios deben enviarse como un arreglo",
+      });
+    }
+
+    // Validar cada precio
+    for (const precio of precios) {
+      if (!["unidad", "libra", "paquete"].includes(precio.tipo)) {
+        return res.status(400).json({
+          message: `Tipo de precio inválido: ${precio.tipo}`,
+        });
+      }
+
+      if (
+        precio.valor === undefined ||
+        precio.valor === null ||
+        !Number.isFinite(Number(precio.valor)) ||
+        Number(precio.valor) < 0
+      ) {
+        return res.status(400).json({
+          message: `Precio inválido para ${precio.tipo}`,
+        });
+      }
+
+      // Si existe equivalencia, también debe ser válida
+      if (
+        precio.equivalencia !== undefined &&
+        precio.equivalencia !== null &&
+        (
+          !Number.isFinite(Number(precio.equivalencia)) ||
+          Number(precio.equivalencia) <= 0
+        )
+      ) {
+        return res.status(400).json({
+          message: `Equivalencia inválida para ${precio.tipo}`,
+        });
+      }
+    }
+
+    // Buscar solamente productos pertenecientes al usuario
+    const producto = await Product.findOne({
+      _id: id,
+      userId: req.userId,
+    });
+
+    if (!producto) {
+      return res.status(404).json({
+        message: "Producto no encontrado",
+      });
+    }
+
+    // Actualizar precios
+    producto.precios = precios;
+
+    await producto.save();
+
+    res.json(producto);
+  } catch (error) {
+    console.error("Error actualizando precios:", error);
+
+    res.status(500).json({
+      message: "Error actualizando precios",
+      error: error.message,
+    });
+  }
+};
+
+
 // ELIMINAR PRODUCTO
 export const eliminarProducto = async (req, res) => {
   try {

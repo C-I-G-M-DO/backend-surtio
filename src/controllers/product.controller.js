@@ -1,5 +1,3 @@
-// controllers/product.controller.js
-
 import Product from "../models/product.js";
 
 export const crearProducto = async (req, res) => {
@@ -11,8 +9,6 @@ export const crearProducto = async (req, res) => {
       precios,
       stock,
       imagen,
-
-      //  Se relaciona automáticamente con el usuario autenticado
       userId: req.userId,
     });
 
@@ -29,9 +25,40 @@ export const crearProducto = async (req, res) => {
   }
 };
 
+// ELIMINAR PRODUCTO
+export const eliminarProducto = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Solo permite eliminar productos pertenecientes
+    // al usuario autenticado
+    const producto = await Product.findOneAndDelete({
+      _id: id,
+      userId: req.userId,
+    });
+
+    if (!producto) {
+      return res.status(404).json({
+        message: "Producto no encontrado",
+      });
+    }
+
+    res.json({
+      message: "Producto eliminado correctamente",
+      producto,
+    });
+  } catch (error) {
+    console.error("Error eliminando producto:", error);
+
+    res.status(500).json({
+      message: "Error eliminando producto",
+      error: error.message,
+    });
+  }
+};
+
 export const obtenerProductos = async (req, res) => {
   try {
-    // 🔥 Solo obtiene los productos del usuario autenticado
     const productos = await Product.find({
       userId: req.userId,
     });
@@ -46,3 +73,52 @@ export const obtenerProductos = async (req, res) => {
   }
 };
 
+// ACTUALIZAR / REPONER STOCK
+export const actualizarStock = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { cantidad } = req.body;
+
+    // Validar cantidad
+    if (
+      cantidad === undefined ||
+      cantidad === null ||
+      !Number.isFinite(Number(cantidad)) ||
+      Number(cantidad) <= 0
+    ) {
+      return res.status(400).json({
+        message: "La cantidad debe ser un número mayor que cero",
+      });
+    }
+
+    // Buscar el producto del usuario autenticado
+    const producto = await Product.findOne({
+      _id: id,
+      userId: req.userId,
+    });
+
+    if (!producto) {
+      return res.status(404).json({
+        message: "Producto no encontrado",
+      });
+    }
+
+    const cantidadAgregar = Number(cantidad);
+
+    // Si stock todavía no existe, comenzar desde 0
+    const stockActual = Number(producto.stock) || 0;
+
+    producto.stock = stockActual + cantidadAgregar;
+
+    await producto.save();
+
+    res.json(producto);
+  } catch (error) {
+    console.error("Error actualizando stock:", error);
+
+    res.status(500).json({
+      message: "Error actualizando stock",
+      error: error.message,
+    });
+  }
+};

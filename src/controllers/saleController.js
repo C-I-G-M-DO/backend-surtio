@@ -30,7 +30,7 @@ export const crearVenta = async (req, res) => {
 
     //  CREAR VENTA
     const venta = await Sale.create({
-      storeId: req.storeId, 
+      userId: req.userId,
       numeroOrden,
       items,
       subtotal,
@@ -82,7 +82,7 @@ export const crearVenta = async (req, res) => {
 export const obtenerVentas = async (req, res) => {
   try {
     const ventas = await Sale.find({
-      storeId: req.storeId, 
+      userId: req.userId,
     }).sort({ createdAt: -1 });
 
     res.json(ventas);

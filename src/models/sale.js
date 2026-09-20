@@ -48,9 +48,9 @@ const itemSchema = new mongoose.Schema(
 
 const saleSchema = new mongoose.Schema(
   {
-    storeId: {
+    userId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Store",
+      ref: "User",
       required: true,
     },
 
@@ -71,9 +71,9 @@ const saleSchema = new mongoose.Schema(
       default: "efectivo",
     },
     numeroOrden: {
-  type: Number,
-  unique: true,
-},
+      type: Number,
+      unique: true,
+    },
   },
   {
     timestamps: true,

@@ -54,6 +54,44 @@ const saleSchema = new mongoose.Schema(
       required: true,
     },
 
+    // ================================
+    // CLIENTE / FIDELIDAD
+    // ================================
+
+    clienteId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Customer",
+      default: null,
+    },
+
+    telefonoCliente: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+
+    puntosCanjeados: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    descuentoPuntos: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    puntosGanados: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    // ================================
+    // VENTA
+    // ================================
+
     items: {
       type: [itemSchema],
       default: [],
@@ -65,11 +103,23 @@ const saleSchema = new mongoose.Schema(
       min: 0,
     },
 
+    total: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+
     metodoPago: {
       type: String,
-      enum: ["efectivo", "tarjeta", "transferencia", "mixto"],
+      enum: [
+        "efectivo",
+        "tarjeta",
+        "transferencia",
+        "mixto",
+      ],
       default: "efectivo",
     },
+
     numeroOrden: {
       type: Number,
       unique: true,
@@ -80,6 +130,5 @@ const saleSchema = new mongoose.Schema(
   }
 );
 
-// Evita OverwriteModelError con nodemon
 export default mongoose.models.Sale ||
   mongoose.model("Sale", saleSchema);

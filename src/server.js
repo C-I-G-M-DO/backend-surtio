@@ -7,6 +7,7 @@ import imageRoutes from './routes/image.routes.js';
 import saleRoutes from './routes/saleRoutes.js';
 import productRoutes from './routes/product.routes.js';
 import authRoutes from './routes/auth.routes.js';
+import customerRoutes from "./routes/customer.routes.js";
 
 import connectDB from './config/db.js';
 
@@ -33,6 +34,9 @@ app.use('/api', imageRoutes);
 
 // Ventas
 app.use('/api/sales', saleRoutes);
+
+//clientes
+app.use("/api/customers", customerRoutes);
 
 const PORT = process.env.PORT || 3000;
 

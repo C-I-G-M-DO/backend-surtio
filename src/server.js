@@ -1,5 +1,6 @@
 import 'dotenv/config';
-
+import reportRoutes from "./routes/reportRoutes.js";
+import { iniciarReporteDiario } from "./jobs/dailyReportJob.js";
 import express from 'express';
 import cors from 'cors';
 
@@ -37,6 +38,12 @@ app.use('/api/sales', saleRoutes);
 
 //clientes
 app.use("/api/customers", customerRoutes);
+
+// Reportes
+app.use("/api/reports", reportRoutes);
+
+// Iniciar proceso automático de reportes
+iniciarReporteDiario();
 
 const PORT = process.env.PORT || 3000;
 

@@ -9,6 +9,7 @@ import saleRoutes from './routes/saleRoutes.js';
 import productRoutes from './routes/product.routes.js';
 import authRoutes from './routes/auth.routes.js';
 import customerRoutes from "./routes/customer.routes.js";
+import orderRoutes from "./routes/orderRoutes.js";
 
 import connectDB from './config/db.js';
 
@@ -44,6 +45,9 @@ app.use("/api/reports", reportRoutes);
 
 // Iniciar proceso automático de reportes
 iniciarReporteDiario();
+
+// ordenes
+app.use("/api/orders", orderRoutes);
 
 const PORT = process.env.PORT || 3000;
 

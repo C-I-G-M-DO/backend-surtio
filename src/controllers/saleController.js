@@ -2,40 +2,225 @@ import Sale from "../models/sale.js";
 import Product from "../models/product.js";
 import Customer from "../models/customer.js";
 
+const TIPOS_UNIDAD = [
+  "unidad",
+  "paquete",
+  "docena",
+];
+
+const TIPOS_LIBRA = [
+  "libra",
+  "media_libra",
+  "cuarta",
+  "onza",
+];
+
+const TIPOS_PRESENTACION = [
+  ...TIPOS_UNIDAD,
+  ...TIPOS_LIBRA,
+];
+
+/**
+ * Devuelve cuánto stock consume una presentación.
+ *
+ * PRODUCTOS CON STOCK EN UNIDADES:
+ *
+ * unidad  -> 1
+ * paquete -> equivalencia
+ * docena  -> 12
+ *
+ * PRODUCTOS CON STOCK EN LIBRAS:
+ *
+ * libra       -> 1 lb
+ * media_libra -> 0.5 lb
+ * cuarta      -> 0.25 lb
+ * onza        -> 0.0625 lb
+ */
+const calcularConsumoStock = ({
+  tipo,
+  cantidad,
+  equivalencia,
+}) => {
+  const cantidadNumero = Number(cantidad);
+
+  if (
+    !Number.isFinite(cantidadNumero) ||
+    cantidadNumero <= 0
+  ) {
+    throw new Error(
+      "Cantidad inválida en uno de los productos"
+    );
+  }
+
+  switch (tipo) {
+    case "unidad":
+      return cantidadNumero;
+
+    case "paquete": {
+      const equivalenciaNumero = Number(equivalencia);
+
+      if (
+        !Number.isFinite(equivalenciaNumero) ||
+        equivalenciaNumero <= 0 ||
+        !Number.isInteger(equivalenciaNumero)
+      ) {
+        throw new Error(
+          "La equivalencia del paquete es inválida"
+        );
+      }
+
+      return cantidadNumero * equivalenciaNumero;
+    }
+
+    case "docena":
+      return cantidadNumero * 12;
+
+    case "libra":
+      return cantidadNumero;
+
+    case "media_libra":
+      return cantidadNumero * 0.5;
+
+    case "cuarta":
+      return cantidadNumero * 0.25;
+
+    case "onza":
+      return cantidadNumero * 0.0625;
+
+    default:
+      throw new Error(
+        `Tipo de presentación inválido: ${tipo}`
+      );
+  }
+};
+
+/**
+ * Valida que la presentación utilizada sea compatible
+ * con la unidad de stock del producto.
+ */
+const validarPresentacionProducto = (
+  producto,
+  tipo
+) => {
+  if (!TIPOS_PRESENTACION.includes(tipo)) {
+    throw new Error(
+      `Tipo de presentación inválido: ${tipo}`
+    );
+  }
+
+  if (
+    producto.unidadStock === "unidad" &&
+    !TIPOS_UNIDAD.includes(tipo)
+  ) {
+    throw new Error(
+      `El producto ${producto.nombre} maneja stock por unidad y no puede venderse por ${tipo}`
+    );
+  }
+
+  if (
+    producto.unidadStock === "libra" &&
+    !TIPOS_LIBRA.includes(tipo)
+  ) {
+    throw new Error(
+      `El producto ${producto.nombre} maneja stock por libra y no puede venderse por ${tipo}`
+    );
+  }
+};
+
+/**
+ * Busca el precio configurado en el producto.
+ */
+const obtenerPrecioPresentacion = (
+  producto,
+  tipo
+) => {
+  const precioEncontrado = producto.precios?.find(
+    (precio) => precio.tipo === tipo
+  );
+
+  if (!precioEncontrado) {
+    throw new Error(
+      `El producto ${producto.nombre} no tiene un precio configurado para ${tipo}`
+    );
+  }
+
+  const precio = Number(precioEncontrado.valor);
+
+  if (!Number.isFinite(precio) || precio < 0) {
+    throw new Error(
+      `El precio configurado para ${producto.nombre} es inválido`
+    );
+  }
+
+  return {
+    precio,
+    equivalencia:
+      precioEncontrado.equivalencia ?? null,
+  };
+};
+
+/**
+ * Valida la cantidad según el tipo de presentación.
+ *
+ * Para unidad, paquete y docena:
+ * solamente se pueden vender cantidades enteras.
+ *
+ * Para presentaciones por peso:
+ * se permiten cantidades decimales.
+ */
+const validarCantidad = (
+  tipo,
+  cantidad
+) => {
+  const cantidadNumero = Number(cantidad);
+
+  if (
+    !Number.isFinite(cantidadNumero) ||
+    cantidadNumero <= 0
+  ) {
+    throw new Error(
+      "Cantidad inválida en uno de los productos"
+    );
+  }
+
+  if (
+    TIPOS_UNIDAD.includes(tipo) &&
+    !Number.isInteger(cantidadNumero)
+  ) {
+    throw new Error(
+      `La cantidad para ${tipo} debe ser un número entero`
+    );
+  }
+
+  return cantidadNumero;
+};
+
+// =========================================================
+// CREAR VENTA
+// =========================================================
+
 export const crearVenta = async (req, res) => {
-  // Iniciar sesión/transacción de MongoDB
   const session = await Product.startSession();
 
   try {
     const {
       items,
-      subtotal,
-      metodoPago,
       clienteId,
       puntosCanjeados = 0,
+      metodoPago = "efectivo",
     } = req.body;
 
     // =====================================================
-    // VALIDACIONES
+    // VALIDACIONES BÁSICAS
     // =====================================================
 
-    if (!items || !Array.isArray(items) || items.length === 0) {
+    if (
+      !items ||
+      !Array.isArray(items) ||
+      items.length === 0
+    ) {
       return res.status(400).json({
         message: "No hay productos en la venta",
-      });
-    }
-
-    if (subtotal === undefined || subtotal === null) {
-      return res.status(400).json({
-        message: "Subtotal requerido",
-      });
-    }
-
-    const subtotalNumero = Number(subtotal);
-
-    if (!Number.isFinite(subtotalNumero) || subtotalNumero < 0) {
-      return res.status(400).json({
-        message: "Subtotal inválido",
       });
     }
 
@@ -43,7 +228,9 @@ export const crearVenta = async (req, res) => {
     // VALIDAR PUNTOS
     // =====================================================
 
-    const puntosSolicitados = Number(puntosCanjeados);
+    const puntosSolicitados = Number(
+      puntosCanjeados
+    );
 
     if (
       !Number.isFinite(puntosSolicitados) ||
@@ -81,25 +268,203 @@ export const crearVenta = async (req, res) => {
       // VALIDAR PUNTOS DEL CLIENTE
       // ===================================================
 
-      if (puntosSolicitados > cliente.puntos) {
+      if (
+        puntosSolicitados > cliente.puntos
+      ) {
         throw new Error(
           `El cliente solo tiene ${cliente.puntos} puntos disponibles`
         );
       }
+    } else if (puntosSolicitados > 0) {
+      throw new Error(
+        "No se pueden canjear puntos sin seleccionar un cliente"
+      );
     }
 
     // =====================================================
-    // CALCULAR DESCUENTO POR PUNTOS
+    // PROCESAR PRODUCTOS
+    // =====================================================
+
+    const itemsVenta = [];
+
+    let subtotalCalculado = 0;
+
+    for (const item of items) {
+      if (!item.productoId) {
+        throw new Error(
+          "Producto inválido en la venta"
+        );
+      }
+
+      if (!item.tipo) {
+        throw new Error(
+          "Tipo de presentación requerido"
+        );
+      }
+
+      // ===================================================
+      // BUSCAR PRODUCTO
+      // ===================================================
+
+      const producto = await Product.findOne({
+        _id: item.productoId,
+        userId: req.userId,
+      }).session(session);
+
+      if (!producto) {
+        throw new Error(
+          `El producto ${item.productoId} no existe`
+        );
+      }
+
+      // ===================================================
+      // VALIDAR PRESENTACIÓN
+      // ===================================================
+
+      validarPresentacionProducto(
+        producto,
+        item.tipo
+      );
+
+      // ===================================================
+      // VALIDAR CANTIDAD
+      // ===================================================
+
+      const cantidad = validarCantidad(
+        item.tipo,
+        item.cantidad
+      );
+
+      // ===================================================
+      // OBTENER PRECIO REAL DESDE MONGODB
+      // ===================================================
+
+      const {
+        precio,
+        equivalencia,
+      } = obtenerPrecioPresentacion(
+        producto,
+        item.tipo
+      );
+
+      // ===================================================
+      // CALCULAR CONSUMO DE STOCK
+      // ===================================================
+
+      const unidadesStockConsumidas =
+        calcularConsumoStock({
+          tipo: item.tipo,
+          cantidad,
+          equivalencia,
+        });
+
+      // ===================================================
+      // CALCULAR TOTAL DE LA LÍNEA
+      // ===================================================
+
+      const totalLinea =
+        precio * cantidad;
+
+      // Evitar pequeños errores de punto flotante
+      const totalLineaRedondeado =
+        Math.round(
+          (totalLinea + Number.EPSILON) * 100
+        ) / 100;
+
+      subtotalCalculado +=
+        totalLineaRedondeado;
+
+      // ===================================================
+      // DESCONTAR STOCK
+      // ===================================================
+
+      const productoActualizado =
+        await Product.findOneAndUpdate(
+          {
+            _id: producto._id,
+            userId: req.userId,
+
+            // Protección contra stock negativo
+            stock: {
+              $gte: unidadesStockConsumidas,
+            },
+          },
+          {
+            $inc: {
+              stock: -unidadesStockConsumidas,
+            },
+          },
+          {
+            new: true,
+            session,
+          }
+        );
+
+      // ===================================================
+      // STOCK INSUFICIENTE
+      // ===================================================
+
+      if (!productoActualizado) {
+        const productoExiste =
+          await Product.findOne({
+            _id: producto._id,
+            userId: req.userId,
+          }).session(session);
+
+        if (!productoExiste) {
+          throw new Error(
+            `El producto ${producto._id} no existe`
+          );
+        }
+
+        throw new Error(
+          `Stock insuficiente para ${productoExiste.nombre}. ` +
+          `Stock disponible: ${productoExiste.stock}`
+        );
+      }
+
+      // ===================================================
+      // GUARDAR SNAPSHOT DE LA VENTA
+      // ===================================================
+
+      itemsVenta.push({
+        productoId: producto._id,
+        nombre: producto.nombre,
+        tipo: item.tipo,
+        precio,
+        cantidad,
+        total: totalLineaRedondeado,
+        equivalencia,
+        unidadesStockConsumidas,
+      });
+    }
+
+    // =====================================================
+    // REDONDEAR SUBTOTAL
+    // =====================================================
+
+    subtotalCalculado =
+      Math.round(
+        (subtotalCalculado + Number.EPSILON) * 100
+      ) / 100;
+
+    // =====================================================
+    // DESCUENTO POR PUNTOS
+    //
     // 1 PUNTO = RD$1
     // =====================================================
 
-    const descuentoPuntos = puntosSolicitados;
+    const descuentoPuntos =
+      puntosSolicitados;
 
     // =====================================================
-    // VALIDAR QUE EL DESCUENTO NO SUPERE LA COMPRA
+    // VALIDAR DESCUENTO
     // =====================================================
 
-    if (descuentoPuntos > subtotalNumero) {
+    if (
+      descuentoPuntos >
+      subtotalCalculado
+    ) {
       throw new Error(
         "Los puntos a canjear no pueden superar el subtotal de la venta"
       );
@@ -109,115 +474,42 @@ export const crearVenta = async (req, res) => {
     // CALCULAR TOTAL
     // =====================================================
 
-    const total = subtotalNumero - descuentoPuntos;
+    const total =
+      Math.round(
+        (
+          subtotalCalculado -
+          descuentoPuntos +
+          Number.EPSILON
+        ) * 100
+      ) / 100;
 
     // =====================================================
     // CALCULAR PUNTOS GANADOS
     //
     // RD$100 gastados = 1 punto
-    //
-    // Se calculan sobre el total realmente pagado.
     // =====================================================
 
-    const puntosGanados = Math.floor(total / 100);
-
-    // =====================================================
-    // VALIDAR Y DESCONTAR STOCK DE TODOS LOS PRODUCTOS
-    // =====================================================
-
-    for (const item of items) {
-      let descuento = Number(item.cantidad);
-
-      // Validar cantidad
-      if (!Number.isFinite(descuento) || descuento <= 0) {
-        throw new Error(
-          "Cantidad inválida en uno de los productos"
-        );
-      }
-
-      // PAQUETE
-      if (item.tipo === "paquete") {
-        const equivalencia = Number(item.equivalencia) || 1;
-
-        descuento =
-          Number(item.cantidad) * equivalencia;
-      }
-
-      // LIBRA
-      if (item.tipo === "libra") {
-        descuento = Number(item.cantidad);
-      }
-
-      // UNIDAD
-      if (item.tipo === "unidad") {
-        descuento = Number(item.cantidad);
-      }
-
-      // ===================================================
-      // DESCONTAR STOCK
-      // ===================================================
-
-      const producto = await Product.findOneAndUpdate(
-        {
-          _id: item.productoId,
-          userId: req.userId,
-
-          // Protección contra stock negativo
-          stock: {
-            $gte: descuento,
-          },
-        },
-        {
-          $inc: {
-            stock: -descuento,
-          },
-        },
-        {
-          new: true,
-          session,
-        }
-      );
-
-      // ===================================================
-      // NO HAY SUFICIENTE STOCK
-      // ===================================================
-
-      if (!producto) {
-        const productoExiste = await Product.findOne({
-          _id: item.productoId,
-          userId: req.userId,
-        }).session(session);
-
-        if (!productoExiste) {
-          throw new Error(
-            `El producto ${item.productoId} no existe`
-          );
-        }
-
-        throw new Error(
-          `Stock insuficiente para ${productoExiste.nombre}. ` +
-            `Stock disponible: ${productoExiste.stock}`
-        );
-      }
-    }
+    const puntosGanados =
+      Math.floor(total / 100);
 
     // =====================================================
     // BUSCAR ÚLTIMA ORDEN
+    //
+    // TEMPORALMENTE MANTENEMOS TU SISTEMA ACTUAL.
+    // Cuando integremos Order + Counter, esto se reemplaza.
     // =====================================================
 
-    const ultimaVenta = await Sale.findOne()
-      .sort({
-        numeroOrden: -1,
-      })
-      .session(session);
+    const ultimaVenta =
+      await Sale.findOne()
+        .sort({
+          numeroOrden: -1,
+        })
+        .session(session);
 
-    // =====================================================
-    // GENERAR NÚMERO DE ORDEN
-    // =====================================================
-
-    const numeroOrden = ultimaVenta
-      ? ultimaVenta.numeroOrden + 1
-      : 1000;
+    const numeroOrden =
+      ultimaVenta
+        ? ultimaVenta.numeroOrden + 1
+        : 1000;
 
     // =====================================================
     // ACTUALIZAR PUNTOS DEL CLIENTE
@@ -245,23 +537,28 @@ export const crearVenta = async (req, res) => {
 
       numeroOrden,
 
-      items,
+      items: itemsVenta,
 
-      subtotal: subtotalNumero,
+      subtotal: subtotalCalculado,
 
       total,
 
-      metodoPago: metodoPago || "efectivo",
+      metodoPago,
 
       // Cliente
-      clienteId: cliente ? cliente._id : null,
+      clienteId:
+        cliente
+          ? cliente._id
+          : null,
 
-      telefonoCliente: cliente
-        ? cliente.telefono
-        : null,
+      telefonoCliente:
+        cliente
+          ? cliente.telefono
+          : null,
 
       // Fidelidad
-      puntosCanjeados: puntosSolicitados,
+      puntosCanjeados:
+        puntosSolicitados,
 
       descuentoPuntos,
 
@@ -282,8 +579,9 @@ export const crearVenta = async (req, res) => {
     // RESPUESTA
     // =====================================================
 
-    res.status(201).json({
-      message: "Venta realizada correctamente",
+    return res.status(201).json({
+      message:
+        "Venta realizada correctamente",
 
       venta,
 
@@ -292,7 +590,8 @@ export const crearVenta = async (req, res) => {
             clienteId: cliente._id,
             nombre: cliente.nombre,
             telefono: cliente.telefono,
-            puntosCanjeados: puntosSolicitados,
+            puntosCanjeados:
+              puntosSolicitados,
             descuentoPuntos,
             puntosGanados,
             puntosDisponibles:
@@ -316,29 +615,32 @@ export const crearVenta = async (req, res) => {
     // ERRORES CONTROLADOS
     // =====================================================
 
-    if (
-      error.message.includes(
-        "Stock insuficiente"
-      ) ||
-      error.message.includes(
-        "Cantidad inválida"
-      ) ||
-      error.message.includes(
-        "no existe"
-      ) ||
-      error.message.includes(
-        "Cliente no encontrado"
-      ) ||
-      error.message.includes(
-        "puntos disponibles"
-      ) ||
-      error.message.includes(
-        "puntos a canjear"
-      ) ||
-      error.message.includes(
-        "Cantidad de puntos inválida"
-      )
-    ) {
+    const erroresControlados = [
+      "Stock insuficiente",
+      "Cantidad inválida",
+      "no existe",
+      "Cliente no encontrado",
+      "puntos disponibles",
+      "puntos a canjear",
+      "Cantidad de puntos inválida",
+      "Tipo de presentación inválido",
+      "no tiene un precio configurado",
+      "maneja stock por unidad",
+      "maneja stock por libra",
+      "equivalencia del paquete",
+      "debe ser un número entero",
+      "sin seleccionar un cliente",
+      "Producto inválido",
+      "Tipo de presentación requerido",
+    ];
+
+    const esErrorControlado =
+      erroresControlados.some(
+        (texto) =>
+          error.message.includes(texto)
+      );
+
+    if (esErrorControlado) {
       return res.status(400).json({
         message: error.message,
       });
@@ -348,12 +650,15 @@ export const crearVenta = async (req, res) => {
     // ERROR GENERAL
     // =====================================================
 
-    res.status(500).json({
+    return res.status(500).json({
       message: "Error creando venta",
       error: error.message,
     });
   } finally {
-    // Cerrar sesión
+    // =====================================================
+    // CERRAR SESIÓN
+    // =====================================================
+
     await session.endSession();
   }
 };
@@ -362,7 +667,10 @@ export const crearVenta = async (req, res) => {
 // OBTENER VENTAS
 // =========================================================
 
-export const obtenerVentas = async (req, res) => {
+export const obtenerVentas = async (
+  req,
+  res
+) => {
   try {
     const ventas = await Sale.find({
       userId: req.userId,
@@ -375,17 +683,16 @@ export const obtenerVentas = async (req, res) => {
         createdAt: -1,
       });
 
-    res.json(ventas);
+    return res.json(ventas);
   } catch (error) {
     console.log(
       "ERROR OBTENIENDO VENTAS:",
       error
     );
 
-    res.status(500).json({
+    return res.status(500).json({
       message: "Error obteniendo ventas",
       error: error.message,
     });
   }
 };
-

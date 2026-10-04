@@ -1,5 +1,15 @@
 import mongoose from "mongoose";
 
+const TIPOS_PRESENTACION = [
+  "unidad",
+  "paquete",
+  "docena",
+  "libra",
+  "media_libra",
+  "cuarta",
+  "onza",
+];
+
 const itemSchema = new mongoose.Schema(
   {
     productoId: {
@@ -16,7 +26,7 @@ const itemSchema = new mongoose.Schema(
 
     tipo: {
       type: String,
-      enum: ["unidad", "libra", "paquete"],
+      enum: TIPOS_PRESENTACION,
       required: true,
     },
 
@@ -29,7 +39,7 @@ const itemSchema = new mongoose.Schema(
     cantidad: {
       type: Number,
       required: true,
-      min: 1,
+      min: 0.01,
     },
 
     total: {
@@ -41,6 +51,23 @@ const itemSchema = new mongoose.Schema(
     equivalencia: {
       type: Number,
       default: null,
+      min: 1,
+    },
+
+    // Cantidad real descontada del inventario.
+    //
+    // Ejemplos:
+    // unidad       -> 2
+    // paquete x 6  -> 12 si se venden 2 paquetes
+    // docena x 12  -> 24 si se venden 2 docenas
+    // libra        -> 2
+    // media_libra  -> 1
+    // cuarta       -> 0.5
+    // onza         -> 0.125
+    unidadesStockConsumidas: {
+      type: Number,
+      required: true,
+      min: 0,
     },
   },
   { _id: false }
@@ -54,9 +81,9 @@ const saleSchema = new mongoose.Schema(
       required: true,
     },
 
-    // ================================
+    // =================================
     // CLIENTE / FIDELIDAD
-    // ================================
+    // =================================
 
     clienteId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -88,9 +115,9 @@ const saleSchema = new mongoose.Schema(
       min: 0,
     },
 
-    // ================================
+    // =================================
     // VENTA
-    // ================================
+    // =================================
 
     items: {
       type: [itemSchema],
@@ -129,6 +156,8 @@ const saleSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+export { TIPOS_PRESENTACION };
 
 export default mongoose.models.Sale ||
   mongoose.model("Sale", saleSchema);

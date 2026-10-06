@@ -24,7 +24,7 @@ const precioSchema = new mongoose.Schema(
       min: 0,
     },
 
-    // Solo obligatorio para paquete
+    // Solo aplica para paquete
     equivalencia: {
       type: Number,
       default: null,
@@ -32,6 +32,36 @@ const precioSchema = new mongoose.Schema(
     },
   },
   { _id: false }
+);
+
+/**
+ * Lote de inventario.
+ *
+ * Cada lote representa una entrada de mercancía
+ * con su propia fecha de vencimiento.
+ */
+const loteSchema = new mongoose.Schema(
+  {
+    cantidadInicial: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+
+    cantidadDisponible: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+
+    fechaVencimiento: {
+      type: Date,
+      required: true,
+    },
+  },
+  {
+    _id: true,
+  }
 );
 
 const productSchema = new mongoose.Schema(
@@ -63,6 +93,28 @@ const productSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 0,
+    },
+
+    /**
+     * Indica si este producto maneja fecha de vencimiento.
+     */
+    vence: {
+      type: Boolean,
+      default: false,
+    },
+
+    /**
+     * Inventario dividido por lotes.
+     *
+     * Un producto que no vence tendrá normalmente:
+     * lotes: []
+     *
+     * Un producto que vence tendrá uno o varios lotes,
+     * cada uno con su propia fecha de vencimiento.
+     */
+    lotes: {
+      type: [loteSchema],
+      default: [],
     },
 
     imagen: {

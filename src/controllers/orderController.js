@@ -32,18 +32,22 @@ const METODOS_PAGO = [
 ];
 
 /**
- * Calcula cuánto stock consume una presentación.
+ * =========================================================
+ * CALCULAR CONSUMO DE STOCK
+ * =========================================================
  *
- * unidad:
- *   unidad = 1
- *   docena = 12
- *   paquete = equivalencia
+ * Productos con stock por unidad:
  *
- * libra:
- *   libra = 1
- *   media_libra = 0.5
- *   cuarta = 0.25
- *   onza = 0.0625
+ * unidad  -> 1
+ * paquete -> equivalencia
+ * docena  -> 12
+ *
+ * Productos con stock por libra:
+ *
+ * libra       -> 1 lb
+ * media_libra -> 0.5 lb
+ * cuarta      -> 0.25 lb
+ * onza        -> 0.0625 lb
  */
 function calcularConsumoStock({
   unidadStock,
@@ -98,10 +102,15 @@ function calcularConsumoStock({
 }
 
 /**
- * Valida que la presentación pertenezca
- * al tipo de stock del producto.
+ * =========================================================
+ * VALIDAR PRESENTACIÓN
+ * =========================================================
  */
-function validarPresentacionProducto(producto, tipo, equivalencia) {
+function validarPresentacionProducto(
+  producto,
+  tipo,
+  equivalencia
+) {
   if (!TIPOS_PRESENTACION.includes(tipo)) {
     throw new Error("Presentación inválida.");
   }
@@ -152,9 +161,14 @@ function validarPresentacionProducto(producto, tipo, equivalencia) {
 }
 
 /**
- * Busca el precio guardado en el producto.
+ * =========================================================
+ * OBTENER PRECIO
+ * =========================================================
  */
-function obtenerPrecioPresentacion(producto, tipo) {
+function obtenerPrecioPresentacion(
+  producto,
+  tipo
+) {
   const precio = producto.precios?.find(
     (item) => item.tipo === tipo
   );
@@ -165,22 +179,34 @@ function obtenerPrecioPresentacion(producto, tipo) {
     );
   }
 
+  const valor = Number(precio.valor);
+
   if (
-    !Number.isFinite(precio.valor) ||
-    precio.valor < 0
+    !Number.isFinite(valor) ||
+    valor < 0
   ) {
     throw new Error(
       `El precio de "${producto.nombre}" no es válido.`
     );
   }
 
-  return precio;
+  return {
+    ...precio.toObject?.() ?? precio,
+    valor,
+    equivalencia:
+      precio.equivalencia ?? null,
+  };
 }
 
 /**
- * Valida cantidades.
+ * =========================================================
+ * VALIDAR CANTIDAD
+ * =========================================================
  */
-function validarCantidad(cantidad, unidadStock) {
+function validarCantidad(
+  cantidad,
+  unidadStock
+) {
   if (
     !Number.isFinite(cantidad) ||
     cantidad <= 0
@@ -201,46 +227,382 @@ function validarCantidad(cantidad, unidadStock) {
 }
 
 /**
- * Obtiene el siguiente número de orden.
- *
- * El primer número será 1000.
+ * =========================================================
+ * OBTENER SIGUIENTE NÚMERO DE ORDEN
+ * =========================================================
  */
 async function obtenerSiguienteNumeroOrden(
   userId,
   session
 ) {
-  const counter = await Counter.findOneAndUpdate(
-    {
-      userId,
-      name: "orders",
-    },
-    {
-      $inc: {
-        seq: 1,
-      },
-      $setOnInsert: {
+  const counter =
+    await Counter.findOneAndUpdate(
+      {
         userId,
         name: "orders",
       },
-    },
-    {
-      new: true,
-      upsert: true,
-      session,
-    }
-  );
+      {
+        $inc: {
+          seq: 1,
+        },
+        $setOnInsert: {
+          userId,
+          name: "orders",
+        },
+      },
+      {
+        new: true,
+        upsert: true,
+        session,
+      }
+    );
 
   return counter.seq;
 }
 
 /**
- * Crear orden.
+ * =========================================================
+ * OBTENER NOMBRE DEL USUARIO
+ * =========================================================
+ */
+function obtenerNombreUsuario(req) {
+  if (req.user?.name) {
+    return req.user.name;
+  }
+
+  if (req.user?.nombre) {
+    return req.user.nombre;
+  }
+
+  if (req.user?.businessName) {
+    return req.user.businessName;
+  }
+
+  return "";
+}
+
+/**
+ * =========================================================
+ * FECHA DE VENCIMIENTO
+ * =========================================================
+ *
+ * Se compara por día y no por hora.
+ *
+ * Por ejemplo:
+ *
+ * 06/10/2026
+ *
+ * sigue siendo válido durante todo ese día.
+ */
+function inicioDelDia(fecha) {
+  const resultado = new Date(fecha);
+
+  resultado.setHours(
+    0,
+    0,
+    0,
+    0
+  );
+
+  return resultado;
+}
+
+/**
+ * =========================================================
+ * DESCONTAR STOCK NORMAL
+ * =========================================================
+ *
+ * Para productos SIN vencimiento.
+ */
+async function descontarStockNormal({
+  producto,
+  consumo,
+  userId,
+  session,
+}) {
+  if (
+    !Number.isFinite(consumo) ||
+    consumo <= 0
+  ) {
+    throw new Error(
+      `El consumo de stock de "${producto.nombre}" no es válido.`
+    );
+  }
+
+  if (producto.stock < consumo) {
+    throw new Error(
+      `Stock insuficiente para "${producto.nombre}". ` +
+        `Stock disponible: ${producto.stock}`
+    );
+  }
+
+  producto.stock =
+    producto.stock - consumo;
+
+  await producto.save({
+    session,
+  });
+
+  return producto;
+}
+
+/**
+ * =========================================================
+ * DESCONTAR STOCK FEFO
+ * =========================================================
+ *
+ * FEFO =
+ * First Expired, First Out
+ *
+ * Se utiliza primero el lote que vence más pronto.
  *
  * IMPORTANTE:
- * Aquí NO se descuenta inventario.
+ * - Actualiza cantidadDisponible del lote.
+ * - Actualiza stock general.
+ * - Todo ocurre dentro de la misma transacción.
  */
-export const crearOrden = async (req, res) => {
-  const session = await mongoose.startSession();
+async function descontarStockFEFO({
+  producto,
+  consumo,
+  session,
+}) {
+  if (
+    !Number.isFinite(consumo) ||
+    consumo <= 0
+  ) {
+    throw new Error(
+      `El consumo de stock de "${producto.nombre}" no es válido.`
+    );
+  }
+
+  if (
+    !Array.isArray(producto.lotes) ||
+    producto.lotes.length === 0
+  ) {
+    throw new Error(
+      `El producto "${producto.nombre}" está configurado con vencimiento pero no tiene lotes disponibles.`
+    );
+  }
+
+  /**
+   * Fecha de hoy.
+   *
+   * Un producto que vence hoy todavía se considera válido.
+   */
+  const hoy = inicioDelDia(
+    new Date()
+  );
+
+  /**
+   * Solo utilizamos lotes:
+   *
+   * - con cantidad disponible
+   * - que no estén vencidos
+   */
+  const lotesDisponibles =
+    producto.lotes
+      .filter((lote) => {
+        const cantidadDisponible =
+          Number(
+            lote.cantidadDisponible
+          );
+
+        if (
+          !Number.isFinite(
+            cantidadDisponible
+          ) ||
+          cantidadDisponible <= 0
+        ) {
+          return false;
+        }
+
+        if (
+          !lote.fechaVencimiento
+        ) {
+          return false;
+        }
+
+        const vencimiento =
+          inicioDelDia(
+            lote.fechaVencimiento
+          );
+
+        return vencimiento >= hoy;
+      })
+      .sort(
+        (a, b) =>
+          new Date(
+            a.fechaVencimiento
+          ).getTime() -
+          new Date(
+            b.fechaVencimiento
+          ).getTime()
+      );
+
+  /**
+   * Cuánto stock válido tenemos realmente
+   * en los lotes.
+   */
+  const stockDisponibleEnLotes =
+    lotesDisponibles.reduce(
+      (total, lote) =>
+        total +
+        Number(
+          lote.cantidadDisponible
+        ),
+      0
+    );
+
+  if (
+    stockDisponibleEnLotes < consumo
+  ) {
+    throw new Error(
+      `Stock vigente insuficiente para "${producto.nombre}". ` +
+        `Disponible en lotes no vencidos: ${stockDisponibleEnLotes}. ` +
+        `Necesario: ${consumo}.`
+    );
+  }
+
+  let restante = consumo;
+
+  /**
+   * FEFO
+   *
+   * Comenzamos por el lote que vence primero.
+   */
+  for (const lote of lotesDisponibles) {
+    if (restante <= 0) {
+      break;
+    }
+
+    const disponible =
+      Number(
+        lote.cantidadDisponible
+      );
+
+    const descontar =
+      Math.min(
+        disponible,
+        restante
+      );
+
+    lote.cantidadDisponible =
+      disponible - descontar;
+
+    restante -= descontar;
+
+    /**
+     * Evitamos pequeños errores
+     * de punto flotante.
+     */
+    lote.cantidadDisponible =
+      Math.round(
+        (
+          lote.cantidadDisponible +
+          Number.EPSILON
+        ) * 1000000
+      ) / 1000000;
+
+    restante =
+      Math.round(
+        (
+          restante +
+          Number.EPSILON
+        ) * 1000000
+      ) / 1000000;
+  }
+
+  if (restante > 0) {
+    throw new Error(
+      `No fue posible completar el consumo de stock de "${producto.nombre}".`
+    );
+  }
+
+  /**
+   * El stock general siempre representa
+   * el total del producto.
+   */
+  producto.stock =
+    Math.max(
+      0,
+      Number(producto.stock) -
+        consumo
+    );
+
+  await producto.save({
+    session,
+  });
+
+  return producto;
+}
+
+/**
+ * =========================================================
+ * DESCONTAR STOCK
+ * =========================================================
+ *
+ * Decide automáticamente:
+ *
+ * vence = true
+ *      -> FEFO
+ *
+ * vence = false
+ *      -> stock normal
+ */
+async function descontarStockProducto({
+  productoId,
+  userId,
+  consumo,
+  session,
+}) {
+  const producto =
+    await Product.findOne({
+      _id: productoId,
+      userId,
+    }).session(session);
+
+  if (!producto) {
+    throw new Error(
+      "Producto no encontrado."
+    );
+  }
+
+  if (producto.vence === true) {
+    await descontarStockFEFO({
+      producto,
+      consumo,
+      session,
+    });
+  } else {
+    await descontarStockNormal({
+      producto,
+      consumo,
+      userId,
+      session,
+    });
+  }
+
+  return producto;
+}
+
+/**
+ * =========================================================
+ * CREAR ORDEN
+ * =========================================================
+ *
+ * IMPORTANTE:
+ *
+ * AQUÍ NO SE DESCUENTA INVENTARIO.
+ *
+ * El inventario solamente se descuenta
+ * cuando la orden es despachada.
+ */
+export const crearOrden = async (
+  req,
+  res
+) => {
+  const session =
+    await mongoose.startSession();
 
   try {
     const userId = req.userId;
@@ -254,10 +616,12 @@ export const crearOrden = async (req, res) => {
 
     if (
       !clientRequestId ||
-      typeof clientRequestId !== "string"
+      typeof clientRequestId !== "string" ||
+      !clientRequestId.trim()
     ) {
       return res.status(400).json({
-        message: "clientRequestId es requerido.",
+        message:
+          "clientRequestId es requerido.",
       });
     }
 
@@ -266,89 +630,118 @@ export const crearOrden = async (req, res) => {
       items.length === 0
     ) {
       return res.status(400).json({
-        message: "La orden debe contener productos.",
+        message:
+          "La orden debe contener productos.",
       });
     }
+
+    const puntos =
+      Number(puntosCanjeados);
 
     if (
-      !Number.isInteger(Number(puntosCanjeados)) ||
-      Number(puntosCanjeados) < 0
+      !Number.isInteger(puntos) ||
+      puntos < 0
     ) {
       return res.status(400).json({
-        message: "Los puntos a canjear no son válidos.",
+        message:
+          "Los puntos a canjear no son válidos.",
       });
     }
 
-    // Si el dispositivo repite exactamente la misma solicitud,
-    // devolvemos la orden existente.
-    const ordenExistente = await Order.findOne({
-      userId,
-      clientRequestId: clientRequestId.trim(),
-    });
+    const clientRequestIdLimpio =
+      clientRequestId.trim();
+
+    /**
+     * Idempotencia:
+     *
+     * Si el teléfono vuelve a enviar
+     * exactamente la misma orden,
+     * devolvemos la orden anterior.
+     */
+    const ordenExistente =
+      await Order.findOne({
+        userId,
+        clientRequestId:
+          clientRequestIdLimpio,
+      });
 
     if (ordenExistente) {
-      return res.status(200).json(ordenExistente);
+      return res.status(200).json(
+        ordenExistente
+      );
     }
 
     session.startTransaction();
 
     let cliente = null;
 
+    /**
+     * =====================================================
+     * CLIENTE
+     * =====================================================
+     */
     if (clienteId) {
-      if (!mongoose.isValidObjectId(clienteId)) {
-        await session.abortTransaction();
-
-        return res.status(400).json({
-          message: "El cliente no es válido.",
-        });
+      if (
+        !mongoose.isValidObjectId(
+          clienteId
+        )
+      ) {
+        throw new Error(
+          "El cliente no es válido."
+        );
       }
 
-      cliente = await Customer.findOne({
-        _id: clienteId,
-        userId,
-      }).session(session);
+      cliente =
+        await Customer.findOne({
+          _id: clienteId,
+          userId,
+        }).session(session);
 
       if (!cliente) {
-        await session.abortTransaction();
-
-        return res.status(404).json({
-          message: "Cliente no encontrado.",
-        });
+        throw new Error(
+          "Cliente no encontrado."
+        );
       }
 
-      if (Number(puntosCanjeados) > cliente.puntos) {
-        await session.abortTransaction();
-
-        return res.status(400).json({
-          message: `El cliente solo tiene ${cliente.puntos} puntos disponibles.`,
-        });
+      if (
+        puntos > cliente.puntos
+      ) {
+        throw new Error(
+          `El cliente solo tiene ${cliente.puntos} puntos disponibles.`
+        );
       }
-    } else if (Number(puntosCanjeados) > 0) {
-      await session.abortTransaction();
-
-      return res.status(400).json({
-        message:
-          "No puedes canjear puntos sin seleccionar un cliente.",
-      });
+    } else if (puntos > 0) {
+      throw new Error(
+        "No puedes canjear puntos sin seleccionar un cliente."
+      );
     }
 
+    /**
+     * =====================================================
+     * PRODUCTOS
+     * =====================================================
+     */
     const itemsVenta = [];
+
     let subtotal = 0;
 
     for (const item of items) {
       if (
         !item?.productoId ||
-        !mongoose.isValidObjectId(item.productoId)
+        !mongoose.isValidObjectId(
+          item.productoId
+        )
       ) {
         throw new Error(
           "Uno de los productos de la orden no es válido."
         );
       }
 
-      const producto = await Product.findOne({
-        _id: item.productoId,
-        userId,
-      }).session(session);
+      const producto =
+        await Product.findOne({
+          _id: item.productoId,
+          userId,
+        }).session(session);
 
       if (!producto) {
         throw new Error(
@@ -358,7 +751,8 @@ export const crearOrden = async (req, res) => {
 
       const tipo = item.tipo;
 
-      const cantidad = Number(item.cantidad);
+      const cantidad =
+        Number(item.cantidad);
 
       validarCantidad(
         cantidad,
@@ -372,7 +766,8 @@ export const crearOrden = async (req, res) => {
         );
 
       const equivalencia =
-        precioProducto.equivalencia ?? null;
+        precioProducto.equivalencia ??
+        null;
 
       validarPresentacionProducto(
         producto,
@@ -380,94 +775,133 @@ export const crearOrden = async (req, res) => {
         equivalencia
       );
 
-      const consumo = calcularConsumoStock({
-        unidadStock: producto.unidadStock,
-        tipo,
-        cantidad,
-        equivalencia,
-      });
+      const consumo =
+        calcularConsumoStock({
+          unidadStock:
+            producto.unidadStock,
+          tipo,
+          cantidad,
+          equivalencia,
+        });
 
       const totalItem =
-        precioProducto.valor * cantidad;
+        Math.round(
+          (
+            precioProducto.valor *
+              cantidad +
+            Number.EPSILON
+          ) * 100
+        ) / 100;
 
       subtotal += totalItem;
 
       itemsVenta.push({
-        productoId: producto._id,
-        nombre: producto.nombre,
+        productoId:
+          producto._id,
+        nombre:
+          producto.nombre,
         tipo,
         cantidad,
-        precio: precioProducto.valor,
-        total: totalItem,
+        precio:
+          precioProducto.valor,
+        total:
+          totalItem,
         equivalencia,
-        unidadesStockConsumidas: consumo,
+        unidadesStockConsumidas:
+          consumo,
       });
     }
 
+    subtotal =
+      Math.round(
+        (
+          subtotal +
+          Number.EPSILON
+        ) * 100
+      ) / 100;
+
+    /**
+     * =====================================================
+     * NÚMERO DE ORDEN
+     * =====================================================
+     */
     const numeroOrden =
       await obtenerSiguienteNumeroOrden(
         userId,
         session
       );
 
-    // Intentamos obtener el nombre del usuario
-    // sin depender de que authMiddleware lo coloque en req.user.
-    let createdByName = "";
+    /**
+     * =====================================================
+     * CREAR ORDEN
+     * =====================================================
+     */
+    const orden =
+      await Order.create(
+        [
+          {
+            userId,
 
-    if (req.user?.name) {
-      createdByName = req.user.name;
-    } else if (req.user?.nombre) {
-      createdByName = req.user.nombre;
-    } else if (req.user?.businessName) {
-      createdByName = req.user.businessName;
-    }
+            clientRequestId:
+              clientRequestIdLimpio,
 
-    const orden = await Order.create(
-      [
+            numeroOrden,
+
+            estado: "pendiente",
+
+            createdByName:
+              obtenerNombreUsuario(req),
+
+            clienteId:
+              cliente?._id ?? null,
+
+            clienteNombre:
+              cliente?.nombre ?? null,
+
+            telefonoCliente:
+              cliente?.telefono ?? null,
+
+            puntosCanjeados:
+              puntos,
+
+            subtotal,
+
+            items: itemsVenta,
+
+            saleId: null,
+          },
+        ],
         {
-          userId,
-          clientRequestId:
-            clientRequestId.trim(),
-          numeroOrden,
-          estado: "pendiente",
-          createdByName,
-
-          clienteId: cliente?._id ?? null,
-          clienteNombre: cliente?.nombre ?? null,
-          telefonoCliente:
-            cliente?.telefono ?? null,
-
-          puntosCanjeados:
-            Number(puntosCanjeados),
-
-          subtotal,
-          items: itemsVenta,
-          saleId: null,
-        },
-      ],
-      {
-        session,
-      }
-    );
+          session,
+        }
+      );
 
     await session.commitTransaction();
 
-    return res.status(201).json(orden[0]);
+    return res.status(201).json(
+      orden[0]
+    );
   } catch (error) {
     try {
       await session.abortTransaction();
     } catch {}
 
-    // Protección adicional frente a doble solicitud.
+    /**
+     * Protección adicional
+     * contra doble solicitud.
+     */
     if (error?.code === 11000) {
-      const existente = await Order.findOne({
-        userId: req.userId,
-        clientRequestId:
-          req.body?.clientRequestId?.trim(),
-      });
+      const existente =
+        await Order.findOne({
+          userId: req.userId,
+          clientRequestId:
+            req.body?.clientRequestId?.trim(),
+        });
 
       if (existente) {
-        return res.status(200).json(existente);
+        return res.status(200).json(
+          existente
+        );
       }
     }
 
@@ -487,25 +921,34 @@ export const crearOrden = async (req, res) => {
 };
 
 /**
- * Listar órdenes.
+ * =========================================================
+ * LISTAR ÓRDENES
+ * =========================================================
  */
-export const listarOrdenes = async (req, res) => {
+export const listarOrdenes = async (
+  req,
+  res
+) => {
   try {
     const filtro = {
       userId: req.userId,
     };
 
     if (req.query.estado) {
-      filtro.estado = req.query.estado;
+      filtro.estado =
+        req.query.estado;
     }
 
-    const ordenes = await Order.find(filtro)
-      .sort({
-        createdAt: -1,
-      })
-      .lean();
+    const ordenes =
+      await Order.find(filtro)
+        .sort({
+          createdAt: -1,
+        })
+        .lean();
 
-    return res.json(ordenes);
+    return res.json(
+      ordenes
+    );
   } catch (error) {
     console.error(
       "ERROR LISTANDO ORDENES:",
@@ -520,194 +963,248 @@ export const listarOrdenes = async (req, res) => {
 };
 
 /**
- * Despachar orden.
+ * =========================================================
+ * DESPACHAR ORDEN
+ * =========================================================
  *
- * Aquí ocurre TODO en una sola transacción:
+ * AQUÍ SE REALIZA LA VENTA REAL.
  *
- * 1. Validar orden.
- * 2. Validar cliente.
- * 3. Validar puntos.
- * 4. Verificar stock.
- * 5. Descontar stock.
- * 6. Crear venta.
- * 7. Actualizar puntos.
- * 8. Marcar orden despachada.
+ * Flujo:
+ *
+ * 1. Buscar orden.
+ * 2. Verificar que esté pendiente.
+ * 3. Validar método de pago.
+ * 4. Obtener cliente.
+ * 5. Validar puntos.
+ * 6. Calcular subtotal.
+ * 7. Descontar inventario FEFO.
+ * 8. Calcular total.
+ * 9. Calcular puntos ganados.
+ * 10. Crear venta.
+ * 11. Actualizar puntos.
+ * 12. Marcar orden despachada.
+ * 13. Commit.
  */
 export const despacharOrden = async (
   req,
   res
 ) => {
-  const session = await mongoose.startSession();
+  const session =
+    await mongoose.startSession();
 
   try {
     const userId = req.userId;
 
-    const { id } = req.params;
+    const { id } =
+      req.params;
 
+    /**
+     * El método de pago se confirma
+     * en despacho.
+     */
     const {
-      clienteId,
-      puntosCanjeados,
       metodoPago = "efectivo",
     } = req.body;
 
-    if (!mongoose.isValidObjectId(id)) {
-      return res.status(400).json({
-        message: "ID de orden inválido.",
-      });
-    }
-
-    if (!METODOS_PAGO.includes(metodoPago)) {
-      return res.status(400).json({
-        message: "Método de pago inválido.",
-      });
-    }
-
-    const puntosSolicitados = Number(
-      puntosCanjeados ?? 0
-    );
-
     if (
-      !Number.isInteger(puntosSolicitados) ||
-      puntosSolicitados < 0
+      !mongoose.isValidObjectId(id)
     ) {
       return res.status(400).json({
-        message: "Los puntos a canjear no son válidos.",
+        message:
+          "ID de orden inválido.",
+      });
+    }
+
+    if (
+      !METODOS_PAGO.includes(
+        metodoPago
+      )
+    ) {
+      return res.status(400).json({
+        message:
+          "Método de pago inválido.",
       });
     }
 
     session.startTransaction();
 
-    const orden = await Order.findOne({
-      _id: id,
-      userId,
-    }).session(session);
+    /**
+     * =====================================================
+     * BUSCAR ORDEN
+     * =====================================================
+     */
+    const orden =
+      await Order.findOne({
+        _id: id,
+        userId,
+      }).session(session);
 
     if (!orden) {
-      await session.abortTransaction();
-
-      return res.status(404).json({
-        message: "Orden no encontrada.",
-      });
+      throw new Error(
+        "Orden no encontrada."
+      );
     }
 
-    if (orden.estado === "despachada") {
+    /**
+     * Protección contra doble despacho.
+     */
+    if (
+      orden.estado ===
+      "despachada"
+    ) {
       await session.abortTransaction();
 
       return res.status(409).json({
-        message: "Esta orden ya fue despachada.",
+        message:
+          "Esta orden ya fue despachada.",
         orden,
       });
     }
 
-    if (orden.estado === "cancelada") {
-      await session.abortTransaction();
-
-      return res.status(409).json({
-        message: "Esta orden está cancelada.",
-      });
+    if (
+      orden.estado ===
+      "cancelada"
+    ) {
+      throw new Error(
+        "Esta orden está cancelada."
+      );
     }
 
-    /*
-     * Si el cliente viene desde la orden,
-     * usamos ese cliente.
+    /**
+     * =====================================================
+     * CLIENTE
+     * =====================================================
      *
-     * Si viene en el request, también lo aceptamos,
-     * pero siempre verificamos que pertenezca al usuario.
+     * El cliente guardado en la orden
+     * es la fuente de verdad.
      */
-    const clienteOrdenId =
-      clienteId ||
-      orden.clienteId ||
-      null;
-
     let cliente = null;
 
-    if (clienteOrdenId) {
-      if (
-        !mongoose.isValidObjectId(
-          clienteOrdenId
-        )
-      ) {
-        await session.abortTransaction();
-
-        return res.status(400).json({
-          message: "El cliente no es válido.",
-        });
-      }
-
-      cliente = await Customer.findOne({
-        _id: clienteOrdenId,
-        userId,
-      }).session(session);
+    if (orden.clienteId) {
+      cliente =
+        await Customer.findOne({
+          _id:
+            orden.clienteId,
+          userId,
+        }).session(session);
 
       if (!cliente) {
-        await session.abortTransaction();
-
-        return res.status(404).json({
-          message: "Cliente no encontrado.",
-        });
+        throw new Error(
+          "El cliente asociado a la orden ya no existe."
+        );
       }
     }
 
-    /*
-     * Si no mandamos puntos explícitamente,
-     * utilizamos los puntos que quedaron guardados
-     * en la orden.
+    /**
+     * =====================================================
+     * PUNTOS
+     * =====================================================
      */
-    const puntosCanjeadosFinal =
-      Number.isInteger(puntosSolicitados) &&
-      puntosSolicitados > 0
-        ? puntosSolicitados
-        : Number(orden.puntosCanjeados || 0);
+    const puntosCanjeados =
+      Number(
+        orden.puntosCanjeados ||
+          0
+      );
 
     if (
-      puntosCanjeadosFinal > 0 &&
+      !Number.isInteger(
+        puntosCanjeados
+      ) ||
+      puntosCanjeados < 0
+    ) {
+      throw new Error(
+        "Los puntos guardados en la orden no son válidos."
+      );
+    }
+
+    if (
+      puntosCanjeados > 0 &&
       !cliente
     ) {
-      await session.abortTransaction();
-
-      return res.status(400).json({
-        message:
-          "No se pueden canjear puntos sin un cliente.",
-      });
+      throw new Error(
+        "La orden tiene puntos para canjear pero no tiene un cliente asociado."
+      );
     }
 
     if (
       cliente &&
-      puntosCanjeadosFinal > cliente.puntos
+      puntosCanjeados >
+        cliente.puntos
     ) {
-      await session.abortTransaction();
-
-      return res.status(409).json({
-        message: `El cliente solo tiene ${cliente.puntos} puntos disponibles.`,
-      });
+      throw new Error(
+        `El cliente solo tiene ${cliente.puntos} puntos disponibles.`
+      );
     }
 
-    /*
-     * Recalculamos el subtotal a partir de la orden.
-     * No aceptamos subtotal enviado por el teléfono.
+    /**
+     * =====================================================
+     * RECALCULAR SUBTOTAL
+     * =====================================================
+     *
+     * No confiamos en un subtotal
+     * enviado por el teléfono.
      */
     let subtotal = 0;
 
     for (const item of orden.items) {
-      subtotal +=
+      const totalItem =
         Number(item.precio) *
         Number(item.cantidad);
+
+      subtotal += totalItem;
+    }
+
+    subtotal =
+      Math.round(
+        (
+          subtotal +
+          Number.EPSILON
+        ) * 100
+      ) / 100;
+
+    /**
+     * =====================================================
+     * DESCUENTO POR PUNTOS
+     * =====================================================
+     *
+     * 1 punto = RD$1
+     */
+    if (
+      puntosCanjeados >
+      subtotal
+    ) {
+      throw new Error(
+        "Los puntos a canjear no pueden superar el subtotal de la venta."
+      );
     }
 
     const descuentoPuntos =
-      Math.min(
-        puntosCanjeadosFinal,
-        subtotal
-      );
+      puntosCanjeados;
 
-    const total = Math.max(
-      0,
-      subtotal - descuentoPuntos
-    );
+    const total =
+      Math.round(
+        (
+          subtotal -
+          descuentoPuntos +
+          Number.EPSILON
+        ) * 100
+      ) / 100;
 
-    /*
-     * Verificamos y descontamos stock
-     * de manera atómica.
+    /**
+     * =====================================================
+     * DESCONTAR INVENTARIO
+     * =====================================================
+     *
+     * IMPORTANTE:
+     *
+     * Aquí es donde ocurre el FEFO.
+     *
+     * Si el producto:
+     *
+     * vence = true
+     *
+     * se utiliza primero el lote con
+     * fecha de vencimiento más cercana.
      */
     for (const item of orden.items) {
       const consumo =
@@ -716,7 +1213,9 @@ export const despacharOrden = async (
         );
 
       if (
-        !Number.isFinite(consumo) ||
+        !Number.isFinite(
+          consumo
+        ) ||
         consumo <= 0
       ) {
         throw new Error(
@@ -724,118 +1223,133 @@ export const despacharOrden = async (
         );
       }
 
-      const producto =
-        await Product.findOneAndUpdate(
-          {
-            _id: item.productoId,
-            userId,
-            stock: {
-              $gte: consumo,
-            },
-          },
-          {
-            $inc: {
-              stock: -consumo,
-            },
-          },
-          {
-            new: true,
-            session,
-          }
-        );
-
-      if (!producto) {
-        throw new Error(
-          `Stock insuficiente para "${item.nombre}".`
-        );
-      }
+      await descontarStockProducto({
+        productoId:
+          item.productoId,
+        userId,
+        consumo,
+        session,
+      });
     }
 
-    /*
-     * Puntos ganados:
-     * RD$100 = 1 punto.
+    /**
+     * =====================================================
+     * PUNTOS GANADOS
+     * =====================================================
+     *
+     * RD$100 = 1 punto
      */
     const puntosGanados =
-      Math.floor(total / 100);
+      Math.floor(
+        total / 100
+      );
 
-    /*
-     * Creamos el snapshot definitivo de la venta.
+    /**
+     * =====================================================
+     * CREAR VENTA
+     * =====================================================
      */
-    const venta = await Sale.create(
-      [
+    const venta =
+      await Sale.create(
+        [
+          {
+            userId,
+
+            numeroOrden:
+              orden.numeroOrden,
+
+            items:
+              orden.items.map(
+                (item) => ({
+                  productoId:
+                    item.productoId,
+
+                  nombre:
+                    item.nombre,
+
+                  tipo:
+                    item.tipo,
+
+                  precio:
+                    item.precio,
+
+                  cantidad:
+                    item.cantidad,
+
+                  total:
+                    item.total,
+
+                  equivalencia:
+                    item.equivalencia ??
+                    null,
+
+                  unidadesStockConsumidas:
+                    item.unidadesStockConsumidas,
+                })
+              ),
+
+            subtotal,
+
+            total,
+
+            metodoPago,
+
+            clienteId:
+              cliente?._id ??
+              null,
+
+            telefonoCliente:
+              cliente?.telefono ??
+              orden.telefonoCliente ??
+              null,
+
+            puntosCanjeados,
+
+            descuentoPuntos,
+
+            puntosGanados,
+          },
+        ],
         {
-          userId,
+          session,
+        }
+      );
 
-          clienteId:
-            cliente?._id ?? null,
-
-          telefonoCliente:
-            cliente?.telefono ??
-            orden.telefonoCliente ??
-            null,
-
-          puntosCanjeados:
-            puntosCanjeadosFinal,
-
-          descuentoPuntos,
-
-          puntosGanados,
-
-          items: orden.items.map(
-            (item) => ({
-              productoId: item.productoId,
-              nombre: item.nombre,
-              tipo: item.tipo,
-              precio: item.precio,
-              cantidad: item.cantidad,
-              total: item.total,
-              equivalencia:
-                item.equivalencia,
-              unidadesStockConsumidas:
-                item.unidadesStockConsumidas,
-            })
-          ),
-
-          subtotal,
-          total,
-
-          metodoPago,
-
-          numeroOrden:
-            orden.numeroOrden,
-        },
-      ],
-      {
-        session,
-      }
-    );
-
-    /*
-     * Actualizamos los puntos del cliente
-     * dentro de la misma transacción.
+    /**
+     * =====================================================
+     * ACTUALIZAR PUNTOS DEL CLIENTE
+     * =====================================================
      */
     if (cliente) {
       const puntosFinales =
-        cliente.puntos -
-        puntosCanjeadosFinal +
+        Number(cliente.puntos) -
+        puntosCanjeados +
         puntosGanados;
 
-      cliente.puntos = Math.max(
-        0,
-        puntosFinales
-      );
+      cliente.puntos =
+        Math.max(
+          0,
+          puntosFinales
+        );
 
       await cliente.save({
         session,
       });
     }
 
-    /*
-     * Marcamos la orden como despachada.
+    /**
+     * =====================================================
+     * MARCAR ORDEN COMO DESPACHADA
+     * =====================================================
      */
-    orden.estado = "despachada";
-    orden.saleId = venta[0]._id;
-    orden.subtotal = subtotal;
+    orden.estado =
+      "despachada";
+
+    orden.saleId =
+      venta[0]._id;
+
+    orden.subtotal =
+      subtotal;
 
     orden.clienteId =
       cliente?._id ??
@@ -853,36 +1367,56 @@ export const despacharOrden = async (
       null;
 
     orden.puntosCanjeados =
-      puntosCanjeadosFinal;
+      puntosCanjeados;
 
     await orden.save({
       session,
     });
 
+    /**
+     * =====================================================
+     * CONFIRMAR TRANSACCIÓN
+     * =====================================================
+     */
     await session.commitTransaction();
 
-    const ordenFinal = await Order.findOne({
-      _id: orden._id,
-      userId,
-    }).lean();
+    /**
+     * Obtenemos la orden definitiva.
+     */
+    const ordenFinal =
+      await Order.findOne({
+        _id: orden._id,
+        userId,
+      }).lean();
 
     return res.status(200).json({
       ...ordenFinal,
 
-      venta: venta[0],
+      venta:
+        venta[0],
 
-      fidelidad: cliente
-        ? {
-            nombre: cliente.nombre,
-            telefono: cliente.telefono,
-            puntosCanjeados:
-              puntosCanjeadosFinal,
-            descuentoPuntos,
-            puntosGanados,
-            puntosDisponibles:
-              cliente.puntos,
-          }
-        : null,
+      fidelidad:
+        cliente
+          ? {
+              clienteId:
+                cliente._id,
+
+              nombre:
+                cliente.nombre,
+
+              telefono:
+                cliente.telefono,
+
+              puntosCanjeados,
+
+              descuentoPuntos,
+
+              puntosGanados,
+
+              puntosDisponibles:
+                cliente.puntos,
+            }
+          : null,
     });
   } catch (error) {
     try {
@@ -898,9 +1432,18 @@ export const despacharOrden = async (
       error?.message ||
       "No se pudo despachar la orden.";
 
+    const mensajeLower =
+      mensaje.toLowerCase();
+
     const esStock =
-      mensaje.toLowerCase().includes(
+      mensajeLower.includes(
         "stock insuficiente"
+      ) ||
+      mensajeLower.includes(
+        "stock vigente insuficiente"
+      ) ||
+      mensajeLower.includes(
+        "lotes no vencidos"
       );
 
     return res.status(

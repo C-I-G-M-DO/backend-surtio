@@ -19,6 +19,12 @@ const TODOS_LOS_TIPOS = [
 ];
 
 /**
+ * ============================================================
+ * HELPERS
+ * ============================================================
+ */
+
+/**
  * Valida un precio según la unidad de stock del producto.
  */
 const validarPrecio = (precio, unidadStock) => {
@@ -31,6 +37,7 @@ const validarPrecio = (precio, unidadStock) => {
   // -----------------------------------------
   // VALIDAR TIPO
   // -----------------------------------------
+
   if (!TODOS_LOS_TIPOS.includes(tipo)) {
     return `Tipo de precio inválido: ${tipo}`;
   }
@@ -38,6 +45,7 @@ const validarPrecio = (precio, unidadStock) => {
   // -----------------------------------------
   // VALIDAR PRECIO
   // -----------------------------------------
+
   if (
     valor === undefined ||
     valor === null ||
@@ -50,6 +58,7 @@ const validarPrecio = (precio, unidadStock) => {
   // -----------------------------------------
   // PRODUCTO CON STOCK POR UNIDAD
   // -----------------------------------------
+
   if (unidadStock === "unidad") {
     if (!TIPOS_UNIDAD.includes(tipo)) {
       return (
@@ -61,6 +70,7 @@ const validarPrecio = (precio, unidadStock) => {
     // ---------------------------------------
     // PAQUETE
     // ---------------------------------------
+
     if (tipo === "paquete") {
       if (
         equivalencia === undefined ||
@@ -80,6 +90,7 @@ const validarPrecio = (precio, unidadStock) => {
     // UNIDAD / DOCENA
     // No necesitan equivalencia
     // ---------------------------------------
+
     if (
       (tipo === "unidad" || tipo === "docena") &&
       equivalencia !== undefined &&
@@ -92,6 +103,7 @@ const validarPrecio = (precio, unidadStock) => {
   // -----------------------------------------
   // PRODUCTO CON STOCK POR LIBRA
   // -----------------------------------------
+
   if (unidadStock === "libra") {
     if (!TIPOS_LIBRA.includes(tipo)) {
       return (
@@ -114,8 +126,155 @@ const validarPrecio = (precio, unidadStock) => {
 };
 
 /**
- * CREAR PRODUCTO
+ * Convierte una fecha recibida por API en una fecha válida.
+ *
+ * Aceptamos:
+ * YYYY-MM-DD
+ * ISO completo
+ * timestamps válidos
  */
+const obtenerFechaValida = (fecha) => {
+  if (!fecha) {
+    return null;
+  }
+
+  const fechaConvertida = new Date(fecha);
+
+  if (Number.isNaN(fechaConvertida.getTime())) {
+    return null;
+  }
+
+  return fechaConvertida;
+};
+
+/**
+ * Valida una cantidad de stock.
+ */
+const validarCantidadStock = (cantidad, unidadStock) => {
+  const cantidadNumerica = Number(cantidad);
+
+  if (
+    cantidad === undefined ||
+    cantidad === null ||
+    !Number.isFinite(cantidadNumerica) ||
+    cantidadNumerica <= 0
+  ) {
+    return "La cantidad debe ser un número mayor que cero";
+  }
+
+  if (
+    unidadStock === "unidad" &&
+    !Number.isInteger(cantidadNumerica)
+  ) {
+    return (
+      "La cantidad para productos por unidad " +
+      "debe ser un número entero"
+    );
+  }
+
+  return null;
+};
+
+/**
+ * Valida los lotes iniciales enviados al crear un producto.
+ *
+ * Cada lote debe tener:
+ * {
+ *   cantidad: number,
+ *   fechaVencimiento: string
+ * }
+ */
+const validarLotesIniciales = (
+  lotesIniciales,
+  stock,
+  unidadStock
+) => {
+  if (lotesIniciales === undefined) {
+    return null;
+  }
+
+  if (!Array.isArray(lotesIniciales)) {
+    return "lotesIniciales debe ser un arreglo";
+  }
+
+  if (lotesIniciales.length === 0) {
+    return "Si el producto vence, debe existir al menos un lote";
+  }
+
+  let suma = 0;
+
+  for (const [index, lote] of lotesIniciales.entries()) {
+    if (!lote || typeof lote !== "object") {
+      return `El lote ${index + 1} no es válido`;
+    }
+
+    const cantidad = Number(lote.cantidad);
+
+    if (
+      !Number.isFinite(cantidad) ||
+      cantidad <= 0
+    ) {
+      return (
+        `La cantidad del lote ${index + 1} ` +
+        `debe ser mayor que cero`
+      );
+    }
+
+    if (
+      unidadStock === "unidad" &&
+      !Number.isInteger(cantidad)
+    ) {
+      return (
+        `La cantidad del lote ${index + 1} ` +
+        `debe ser un número entero`
+      );
+    }
+
+    const fecha = obtenerFechaValida(
+      lote.fechaVencimiento
+    );
+
+    if (!fecha) {
+      return (
+        `La fecha de vencimiento del lote ${index + 1} ` +
+        `no es válida`
+      );
+    }
+
+    suma += cantidad;
+  }
+
+  const stockNumerico = Number(stock);
+
+  if (Math.abs(suma - stockNumerico) > 0.000001) {
+    return (
+      "La suma de las cantidades de los lotes " +
+      "debe coincidir con el stock inicial"
+    );
+  }
+
+  return null;
+};
+
+/**
+ * Convierte los lotes recibidos desde el frontend
+ * al formato almacenado en MongoDB.
+ */
+const construirLotesIniciales = (lotesIniciales) => {
+  return lotesIniciales.map((lote) => ({
+    cantidadInicial: Number(lote.cantidad),
+    cantidadDisponible: Number(lote.cantidad),
+    fechaVencimiento: new Date(lote.fechaVencimiento),
+  }));
+};
+
+
+/**
+ * ============================================================
+ * CREAR PRODUCTO
+ * ============================================================
+ */
+
 export const crearProducto = async (req, res) => {
   try {
     const {
@@ -124,11 +283,13 @@ export const crearProducto = async (req, res) => {
       precios,
       stock,
       imagen,
+      lotesIniciales,
     } = req.body;
 
     // -----------------------------------------
     // VALIDAR NOMBRE
     // -----------------------------------------
+
     if (
       !nombre ||
       typeof nombre !== "string" ||
@@ -142,6 +303,7 @@ export const crearProducto = async (req, res) => {
     // -----------------------------------------
     // VALIDAR UNIDAD DE STOCK
     // -----------------------------------------
+
     if (!["unidad", "libra"].includes(unidadStock)) {
       return res.status(400).json({
         message:
@@ -152,6 +314,7 @@ export const crearProducto = async (req, res) => {
     // -----------------------------------------
     // VALIDAR STOCK
     // -----------------------------------------
+
     if (
       stock === undefined ||
       stock === null ||
@@ -180,6 +343,7 @@ export const crearProducto = async (req, res) => {
     // -----------------------------------------
     // VALIDAR PRECIOS
     // -----------------------------------------
+
     if (!Array.isArray(precios) || precios.length === 0) {
       return res.status(400).json({
         message:
@@ -201,13 +365,40 @@ export const crearProducto = async (req, res) => {
     }
 
     // -----------------------------------------
+    // VALIDAR LOTES / VENCIMIENTO
+    // -----------------------------------------
+
+    let vence = false;
+    let lotes = [];
+
+    if (lotesIniciales !== undefined) {
+      const errorLotes = validarLotesIniciales(
+        lotesIniciales,
+        stockNumerico,
+        unidadStock
+      );
+
+      if (errorLotes) {
+        return res.status(400).json({
+          message: errorLotes,
+        });
+      }
+
+      vence = true;
+      lotes = construirLotesIniciales(lotesIniciales);
+    }
+
+    // -----------------------------------------
     // CREAR PRODUCTO
     // -----------------------------------------
+
     const nuevoProducto = new Product({
       nombre: nombre.trim(),
       unidadStock,
       precios,
       stock: stockNumerico,
+      vence,
+      lotes,
       imagen: imagen || null,
       userId: req.userId,
     });
@@ -231,8 +422,11 @@ export const crearProducto = async (req, res) => {
 
 
 /**
+ * ============================================================
  * ACTUALIZAR PRECIOS DEL PRODUCTO
+ * ============================================================
  */
+
 export const actualizarPrecios = async (req, res) => {
   try {
     const { id } = req.params;
@@ -241,6 +435,7 @@ export const actualizarPrecios = async (req, res) => {
     // -----------------------------------------
     // VALIDAR ARRAY
     // -----------------------------------------
+
     if (!Array.isArray(precios)) {
       return res.status(400).json({
         message:
@@ -258,6 +453,7 @@ export const actualizarPrecios = async (req, res) => {
     // -----------------------------------------
     // BUSCAR PRODUCTO
     // -----------------------------------------
+
     const producto = await Product.findOne({
       _id: id,
       userId: req.userId,
@@ -272,6 +468,7 @@ export const actualizarPrecios = async (req, res) => {
     // -----------------------------------------
     // VALIDAR CADA PRECIO
     // -----------------------------------------
+
     for (const precio of precios) {
       const errorPrecio = validarPrecio(
         precio,
@@ -288,6 +485,7 @@ export const actualizarPrecios = async (req, res) => {
     // -----------------------------------------
     // GUARDAR PRECIOS
     // -----------------------------------------
+
     producto.precios = precios;
 
     await producto.save();
@@ -309,8 +507,11 @@ export const actualizarPrecios = async (req, res) => {
 
 
 /**
+ * ============================================================
  * ELIMINAR PRODUCTO
+ * ============================================================
  */
+
 export const eliminarProducto = async (req, res) => {
   try {
     const { id } = req.params;
@@ -348,8 +549,11 @@ export const eliminarProducto = async (req, res) => {
 
 
 /**
+ * ============================================================
  * OBTENER PRODUCTOS
+ * ============================================================
  */
+
 export const obtenerProductos = async (req, res) => {
   try {
     const productos = await Product.find({
@@ -372,31 +576,40 @@ export const obtenerProductos = async (req, res) => {
 
 
 /**
+ * ============================================================
  * ACTUALIZAR / REPONER STOCK
+ * ============================================================
+ *
+ * Productos SIN vencimiento:
+ *
+ * {
+ *   cantidad: 20
+ * }
+ *
+ * Productos CON vencimiento:
+ *
+ * {
+ *   cantidad: 20,
+ *   fechaVencimiento: "2026-12-20"
+ * }
+ *
+ * Cada reposición de un producto que vence crea
+ * un nuevo lote.
  */
+
 export const actualizarStock = async (req, res) => {
   try {
     const { id } = req.params;
-    const { cantidad } = req.body;
 
-    // -----------------------------------------
-    // VALIDAR CANTIDAD
-    // -----------------------------------------
-    if (
-      cantidad === undefined ||
-      cantidad === null ||
-      !Number.isFinite(Number(cantidad)) ||
-      Number(cantidad) <= 0
-    ) {
-      return res.status(400).json({
-        message:
-          "La cantidad debe ser un número mayor que cero",
-      });
-    }
+    const {
+      cantidad,
+      fechaVencimiento,
+    } = req.body;
 
     // -----------------------------------------
     // BUSCAR PRODUCTO
     // -----------------------------------------
+
     const producto = await Product.findOne({
       _id: id,
       userId: req.userId,
@@ -408,29 +621,85 @@ export const actualizarStock = async (req, res) => {
       });
     }
 
-    const cantidadAgregar = Number(cantidad);
+    // -----------------------------------------
+    // VALIDAR CANTIDAD
+    // -----------------------------------------
 
-    // -----------------------------------------
-    // STOCK POR UNIDAD
-    // -----------------------------------------
-    if (
-      producto.unidadStock === "unidad" &&
-      !Number.isInteger(cantidadAgregar)
-    ) {
+    const errorCantidad = validarCantidadStock(
+      cantidad,
+      producto.unidadStock
+    );
+
+    if (errorCantidad) {
       return res.status(400).json({
-        message:
-          "La cantidad de reposición para productos por unidad debe ser un número entero",
+        message: errorCantidad,
       });
     }
 
+    const cantidadAgregar = Number(cantidad);
+
     // -----------------------------------------
-    // STOCK POR LIBRA
+    // PRODUCTO CON VENCIMIENTO
     // -----------------------------------------
-    // En productos por libra sí permitimos:
-    // 0.5
-    // 0.25
-    // 1.75
-    // etc.
+
+    if (producto.vence) {
+      if (!fechaVencimiento) {
+        return res.status(400).json({
+          message:
+            "Este producto maneja vencimiento. " +
+            "Debes indicar la fecha de vencimiento " +
+            "del nuevo lote.",
+        });
+      }
+
+      const fecha = obtenerFechaValida(
+        fechaVencimiento
+      );
+
+      if (!fecha) {
+        return res.status(400).json({
+          message:
+            "La fecha de vencimiento no es válida",
+        });
+      }
+
+      // No permitimos registrar una mercancía
+      // que ya esté vencida.
+      const ahora = new Date();
+
+      if (fecha < ahora) {
+        return res.status(400).json({
+          message:
+            "No puedes agregar un lote cuya fecha " +
+            "de vencimiento ya pasó.",
+        });
+      }
+
+      if (!Array.isArray(producto.lotes)) {
+        producto.lotes = [];
+      }
+
+      // Crear nuevo lote
+      producto.lotes.push({
+        cantidadInicial: cantidadAgregar,
+        cantidadDisponible: cantidadAgregar,
+        fechaVencimiento: fecha,
+      });
+
+      // Actualizar stock general
+      producto.stock =
+        (Number(producto.stock) || 0) +
+        cantidadAgregar;
+
+      await producto.save();
+
+      return res.json(producto);
+    }
+
+    // -----------------------------------------
+    // PRODUCTO SIN VENCIMIENTO
+    // -----------------------------------------
+
     const stockActual =
       Number(producto.stock) || 0;
 
@@ -439,7 +708,7 @@ export const actualizarStock = async (req, res) => {
 
     await producto.save();
 
-    res.json(producto);
+    return res.json(producto);
 
   } catch (error) {
     console.error(

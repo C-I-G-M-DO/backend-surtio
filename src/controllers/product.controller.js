@@ -721,4 +721,115 @@ export const actualizarStock = async (req, res) => {
       error: error.message,
     });
   }
+  
+};
+
+
+export const retirarLoteVencido = async (req, res) => {
+  try {
+    const { id, loteId } = req.params;
+    const { cantidad, motivo } = req.body;
+
+    const cantidadRetirar = Number(cantidad);
+    const motivoLimpio =
+      typeof motivo === "string" ? motivo.trim() : "";
+
+    if (!Number.isFinite(cantidadRetirar) || cantidadRetirar <= 0) {
+      return res.status(400).json({
+        message: "La cantidad debe ser mayor que cero.",
+      });
+    }
+
+    if (!motivoLimpio) {
+      return res.status(400).json({
+        message: "Debes indicar el motivo de la retirada.",
+      });
+    }
+
+    const producto = await Product.findOne({
+      _id: id,
+      userId: req.userId,
+    });
+
+    if (!producto) {
+      return res.status(404).json({
+        message: "Producto no encontrado.",
+      });
+    }
+
+    if (!producto.vence) {
+      return res.status(400).json({
+        message: "Este producto no tiene control de vencimientos.",
+      });
+    }
+
+    if (
+      producto.unidadStock === "unidad" &&
+      !Number.isInteger(cantidadRetirar)
+    ) {
+      return res.status(400).json({
+        message: "La cantidad debe ser un número entero para productos por unidad.",
+      });
+    }
+
+    const lote = producto.lotes.id(loteId);
+
+    if (!lote) {
+      return res.status(404).json({
+        message: "No se encontró el lote indicado.",
+      });
+    }
+
+    const fechaVencimiento = new Date(lote.fechaVencimiento);
+
+    if (Number.isNaN(fechaVencimiento.getTime())) {
+      return res.status(400).json({
+        message: "El lote no tiene una fecha de vencimiento válida.",
+      });
+    }
+
+    const fechaVencimientoTexto = fechaVencimiento
+      .toISOString()
+      .slice(0, 10);
+
+    const hoy = new Date().toISOString().slice(0, 10);
+
+    if (fechaVencimientoTexto >= hoy) {
+      return res.status(400).json({
+        message: "Solo puedes retirar lotes que ya estén vencidos.",
+      });
+    }
+
+    if (
+      cantidadRetirar > lote.cantidadDisponible ||
+      cantidadRetirar > producto.stock
+    ) {
+      return res.status(400).json({
+        message: "La cantidad supera las existencias disponibles.",
+      });
+    }
+
+    // Descontar las existencias del lote y del producto.
+    lote.cantidadDisponible -= cantidadRetirar;
+    producto.stock -= cantidadRetirar;
+
+    // Registrar la retirada sin crear una venta.
+    producto.historialRetiradas.push({
+      loteId: lote._id,
+      cantidad: cantidadRetirar,
+      fechaRetirada: new Date(),
+      fechaVencimiento: lote.fechaVencimiento,
+      motivo: motivoLimpio,
+    });
+
+    await producto.save();
+
+    return res.status(200).json(producto);
+  } catch (error) {
+    console.error("Error retirando lote vencido:", error);
+
+    return res.status(500).json({
+      message: "No se pudo registrar la retirada del lote vencido.",
+    });
+  }
 };

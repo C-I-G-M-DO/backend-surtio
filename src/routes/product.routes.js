@@ -6,6 +6,7 @@ import {
   actualizarStock,
   eliminarProducto,
   actualizarPrecios,
+  retirarLoteVencido,
 } from "../controllers/product.controller.js";
 
 import { authMiddleware } from "../middleware/auth.js";
@@ -24,5 +25,11 @@ router.delete("/:id", authMiddleware, eliminarProducto);
 
 // Actualizar precio
 router.patch("/:id/precios", authMiddleware, actualizarPrecios);
+
+router.patch(
+  "/:id/lotes/:loteId/retirar-vencido",
+  authMiddleware,
+  retirarLoteVencido
+);
 
 export default router;

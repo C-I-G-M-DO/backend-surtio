@@ -962,6 +962,75 @@ export const listarOrdenes = async (
   }
 };
 
+
+/**
+ * =========================================================
+ * ELIMINAR ORDEN PENDIENTE
+ * =========================================================
+ *
+ * - Solo permite eliminar órdenes pendientes.
+ * - No descuenta ni repone inventario.
+ * - No crea ventas.
+ * - No modifica los puntos del cliente.
+ * - Impide eliminar órdenes ya despachadas.
+ */
+export const eliminarOrden = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({
+        message: "ID de orden inválido.",
+      });
+    }
+
+    // Elimina solamente si la orden sigue pendiente
+    // y pertenece al usuario autenticado.
+    const ordenEliminada = await Order.findOneAndDelete({
+      _id: id,
+      userId,
+      estado: "pendiente",
+    });
+
+    if (ordenEliminada) {
+      return res.status(200).json({
+        message: `La orden #${ordenEliminada.numeroOrden} fue eliminada correctamente.`,
+        id: ordenEliminada._id,
+      });
+    }
+
+    // Si no se eliminó, verificamos por qué.
+    const ordenExistente = await Order.findOne({
+      _id: id,
+      userId,
+    }).select("_id estado numeroOrden");
+
+    if (!ordenExistente) {
+      return res.status(404).json({
+        message: "Orden no encontrada.",
+      });
+    }
+
+    if (ordenExistente.estado === "despachada") {
+      return res.status(409).json({
+        message: "No se puede eliminar una orden que ya fue despachada.",
+      });
+    }
+
+    return res.status(409).json({
+      message: "La orden ya no está pendiente y no se puede eliminar.",
+    });
+  } catch (error) {
+    console.error("Error al eliminar orden:", error);
+
+    return res.status(500).json({
+      message: "No se pudo eliminar la orden.",
+    });
+  }
+};
+
+
 /**
  * =========================================================
  * DESPACHAR ORDEN

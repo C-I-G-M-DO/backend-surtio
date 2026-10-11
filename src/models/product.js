@@ -64,6 +64,38 @@ const loteSchema = new mongoose.Schema(
   }
 );
 
+
+const retiradaSchema = new mongoose.Schema(
+  {
+    loteId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+    },
+    cantidad: {
+      type: Number,
+      required: true,
+      min: 0.000001,
+    },
+    fechaRetirada: {
+      type: Date,
+      required: true,
+      default: Date.now,
+    },
+    fechaVencimiento: {
+      type: Date,
+      required: true,
+    },
+    motivo: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+  },
+  { _id: true }
+);
+
+
+
 const productSchema = new mongoose.Schema(
   {
     nombre: {
@@ -94,6 +126,13 @@ const productSchema = new mongoose.Schema(
       required: true,
       min: 0,
     },
+
+    
+historialRetiradas: {
+  type: [retiradaSchema],
+  default: [],
+},
+
 
     /**
      * Indica si este producto maneja fecha de vencimiento.

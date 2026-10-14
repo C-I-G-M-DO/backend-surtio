@@ -126,7 +126,19 @@ const productSchema = new mongoose.Schema(
       required: true,
       min: 0,
     },
-
+// Mínimo de existencias para generar alertas.
+    // null significa que no se ha configurado un mínimo.
+    stockMinimo: {
+      type: Number,
+      default: null,
+      min: 0,
+      validate: {
+        validator: function (value) {
+          return value === null || Number.isFinite(value);
+        },
+        message: "El stock mínimo debe ser un número válido.",
+      },
+    },
     
 historialRetiradas: {
   type: [retiradaSchema],

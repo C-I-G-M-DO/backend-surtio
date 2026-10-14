@@ -7,6 +7,7 @@ import {
   eliminarProducto,
   actualizarPrecios,
   retirarLoteVencido,
+  actualizarStockMinimo,
 } from "../controllers/product.controller.js";
 
 import { authMiddleware } from "../middleware/auth.js";
@@ -19,6 +20,13 @@ router.get("/", authMiddleware, obtenerProductos);
 
 // Actualizar stock de un producto
 router.patch("/:id/stock", authMiddleware, actualizarStock);
+
+// Actualizar stock mínimo de un producto
+router.patch(
+  "/:id/stock-minimo",
+  authMiddleware,
+  actualizarStockMinimo
+);
 
 // Eliminar producto
 router.delete("/:id", authMiddleware, eliminarProducto);

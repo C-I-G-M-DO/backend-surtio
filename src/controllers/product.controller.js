@@ -282,6 +282,7 @@ export const crearProducto = async (req, res) => {
       unidadStock,
       precios,
       stock,
+      stockMinimo,
       imagen,
       lotesIniciales,
     } = req.body;
@@ -340,6 +341,30 @@ export const crearProducto = async (req, res) => {
       });
     }
 
+
+    //validar stock minimo
+    let stockMinimoNumerico = null;
+
+if (
+  stockMinimo !== undefined &&
+  stockMinimo !== null &&
+  stockMinimo !== ""
+) {
+  stockMinimoNumerico = Number(stockMinimo);
+
+  if (
+    !Number.isFinite(stockMinimoNumerico) ||
+    stockMinimoNumerico < 0 ||
+    (unidadStock === "unidad" &&
+      !Number.isInteger(stockMinimoNumerico))
+  ) {
+    return res.status(400).json({
+      message:
+        "El stock mínimo debe ser un número válido y no negativo. Para productos por unidad, debe ser entero.",
+    });
+  }
+}
+
     // -----------------------------------------
     // VALIDAR PRECIOS
     // -----------------------------------------
@@ -397,6 +422,7 @@ export const crearProducto = async (req, res) => {
       unidadStock,
       precios,
       stock: stockNumerico,
+      stockMinimo: stockMinimoNumerico,
       vence,
       lotes,
       imagen: imagen || null,
@@ -426,6 +452,61 @@ export const crearProducto = async (req, res) => {
  * ACTUALIZAR PRECIOS DEL PRODUCTO
  * ============================================================
  */
+
+// actualizar stock minimo
+
+export const actualizarStockMinimo = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { stockMinimo } = req.body;
+
+    const producto = await Product.findOne({
+      _id: id,
+      userId: req.userId,
+    });
+
+    if (!producto) {
+      return res.status(404).json({
+        message: "Producto no encontrado",
+      });
+    }
+
+    let minimo = null;
+
+    if (
+      stockMinimo !== undefined &&
+      stockMinimo !== null &&
+      stockMinimo !== ""
+    ) {
+      minimo = Number(stockMinimo);
+
+      if (
+        !Number.isFinite(minimo) ||
+        minimo < 0 ||
+        (producto.unidadStock === "unidad" &&
+          !Number.isInteger(minimo))
+      ) {
+        return res.status(400).json({
+          message:
+            "El stock mínimo debe ser un número no negativo. Para productos por unidad, debe ser entero.",
+        });
+      }
+    }
+
+    producto.stockMinimo = minimo;
+    await producto.save();
+
+    return res.json(producto);
+  } catch (error) {
+    console.error("Error actualizando stock mínimo:", error);
+
+    return res.status(500).json({
+      message: "No se pudo actualizar el stock mínimo",
+    });
+  }
+};
+
+
 
 export const actualizarPrecios = async (req, res) => {
   try {
